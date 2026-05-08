@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+
+# Local runtime data and credentials
+config
+data/
+*.log
+.build_data_backup/
+.tools/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# Legacy local scripts from the early prototype. Keep them locally, but do not
+# publish them as part of the green desktop client.
+autologin.py
+run_autologin.bat
+run_autologin_silent.vbs
+start_watchdog.vbs
+watchdog.bat
+watchdog.ps1
+view_log.ps1
