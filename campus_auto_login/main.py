@@ -183,6 +183,18 @@ QTextEdit#logView {
 QCheckBox {
     spacing: 8px;
 }
+QDialog, QMessageBox, QInputDialog {
+    background: #ffffff;
+    color: #111827;
+}
+QDialog QLabel, QMessageBox QLabel, QInputDialog QLabel {
+    color: #111827;
+    background: transparent;
+}
+QDialog QTextEdit, QMessageBox QTextEdit, QInputDialog QTextEdit {
+    background: #ffffff;
+    color: #111827;
+}
 """
 
 
@@ -295,6 +307,9 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.detect_status = QLabel("")
         self.detect_status.setObjectName("pageSubtitle")
         self.detect_status.setWordWrap(True)
+        self.detect_back_dashboard_button = self._make_button("返回主界面", icon_name="SP_ArrowBack")
+        self.detect_back_dashboard_button.clicked.connect(self._back_to_dashboard)
+        self.detect_back_dashboard_button.setVisible(False)
         self.diagnostic_box = QTextEdit()
         self.diagnostic_box.setReadOnly(True)
         self.diagnostic_box.setVisible(False)
@@ -320,7 +335,11 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         layout.addWidget(subtitle)
         layout.addWidget(input_panel)
         layout.addWidget(self.diagnostic_box)
-        layout.addWidget(self.copy_diagnostic_button, 0, Qt.AlignmentFlag.AlignRight)
+        bottom_buttons = QHBoxLayout()
+        bottom_buttons.addWidget(self.detect_back_dashboard_button)
+        bottom_buttons.addStretch(1)
+        bottom_buttons.addWidget(self.copy_diagnostic_button)
+        layout.addLayout(bottom_buttons)
         layout.addStretch(1)
         self.stack.addWidget(self.detect_page)
 
@@ -361,10 +380,14 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         buttons.setSpacing(10)
         self.back_button = self._make_button("返回重新识别", icon_name="SP_ArrowBack")
         self.back_button.clicked.connect(lambda: self.stack.setCurrentWidget(self.detect_page))
+        self.cancel_profile_button = self._make_button("返回主界面")
+        self.cancel_profile_button.clicked.connect(self._back_to_dashboard)
+        self.cancel_profile_button.setVisible(False)
         self.save_profile_button = self._make_button("保存配置", "success", "SP_DialogSaveButton")
         self.save_profile_button.clicked.connect(self._save_detected_profile)
         buttons.addStretch(1)
         buttons.addWidget(self.back_button)
+        buttons.addWidget(self.cancel_profile_button)
         buttons.addWidget(self.save_profile_button)
 
         layout.addWidget(title)
@@ -385,7 +408,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         title_block.addWidget(page_title("校园网自动登录"))
         title_block.addWidget(page_subtitle("管理配置、手动登录和后台常驻。"))
         self.new_profile_button = self._make_button("新增配置", icon_name="SP_FileDialogNewFolder")
-        self.new_profile_button.clicked.connect(lambda: self.stack.setCurrentWidget(self.detect_page))
+        self.new_profile_button.clicked.connect(self._start_new_profile)
         header.addLayout(title_block, 1)
         header.addWidget(self.new_profile_button, 0, Qt.AlignmentFlag.AlignTop)
 
@@ -402,6 +425,11 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.status_label = QLabel("未启动")
         self.status_label.setObjectName("statusPill")
         self.status_label.setWordWrap(True)
+        self.saved_name_input = QLineEdit()
+        self.saved_name_input.setPlaceholderText("配置名称")
+        self.saved_name_input.returnPressed.connect(self._rename_current_profile)
+        self.rename_profile_button = self._make_button("保存名称", icon_name="SP_DialogSaveButton")
+        self.rename_profile_button.clicked.connect(self._rename_current_profile)
         self.resident_checkbox = QCheckBox("启动常驻")
         self.resident_checkbox.stateChanged.connect(self._resident_changed)
         self.startup_checkbox = QCheckBox("开机自启")
@@ -435,8 +463,14 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         action_row.addWidget(self.login_button)
         action_row.addWidget(self.logout_button)
         action_row.addWidget(self.pause_button)
+        rename_row = QHBoxLayout()
+        rename_row.setSpacing(10)
+        rename_row.addWidget(self.saved_name_input, 1)
+        rename_row.addWidget(self.rename_profile_button)
         controls.addWidget(controls_title)
         controls.addWidget(self.status_label)
+        controls.addWidget(QLabel("配置名称"))
+        controls.addLayout(rename_row)
         controls.addLayout(switches)
         controls.addLayout(action_row)
         controls.addStretch(1)
@@ -487,7 +521,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.profiles = self.store.load_profiles()
         self.profile_list.clear()
         for profile in self.profiles:
-            self.profile_list.addItem(f"{profile.name} - {profile.adapter_name}")
+            self.profile_list.addItem(self._profile_list_text(profile))
 
     def _current_profile(self) -> Profile | None:
         row = self.profile_list.currentRow()
@@ -495,10 +529,39 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
             return None
         return self.profiles[row]
 
+    def _profile_list_text(self, profile: Profile) -> str:
+        return f"{profile.name} - {profile.adapter_name}"
+
+    def _start_new_profile(self) -> None:
+        self.detected_outcome = None
+        self.detect_status.setText("")
+        self.diagnostic_box.clear()
+        self.diagnostic_box.setVisible(False)
+        self.copy_diagnostic_button.setVisible(False)
+        self.protocol_label.setText("")
+        self.profile_name_input.clear()
+        self.username_input.clear()
+        self.password_input.clear()
+        self.custom_suffix_input.clear()
+        self.operator_combo.setCurrentIndex(0)
+        has_profiles = bool(self.profiles)
+        self.detect_back_dashboard_button.setVisible(has_profiles)
+        self.cancel_profile_button.setVisible(has_profiles)
+        self.stack.setCurrentWidget(self.detect_page)
+
+    def _back_to_dashboard(self) -> None:
+        if self.profiles:
+            self.stack.setCurrentWidget(self.dashboard_page)
+            if self.profile_list.currentRow() < 0:
+                self.profile_list.setCurrentRow(0)
+            return
+        self.stack.setCurrentWidget(self.detect_page)
+
     def _select_profile(self, row: int) -> None:
         profile = self._current_profile()
         if not profile:
             return
+        self.saved_name_input.setText(profile.name)
         self.resident_checkbox.blockSignals(True)
         self.startup_checkbox.blockSignals(True)
         self.resident_checkbox.setChecked(profile.resident_enabled)
@@ -537,6 +600,27 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
             self.diagnostic_box.setPlainText(diagnostic)
             self.diagnostic_box.setVisible(True)
             self.copy_diagnostic_button.setVisible(True)
+
+    def _rename_current_profile(self) -> None:
+        row = self.profile_list.currentRow()
+        profile = self._current_profile()
+        if not profile:
+            return
+        new_name = self.saved_name_input.text().strip()
+        if not new_name:
+            QMessageBox.warning(self, "无法保存名称", "配置名称不能为空")
+            self.saved_name_input.setText(profile.name)
+            return
+        if new_name == profile.name:
+            self._set_status("配置名称未改变")
+            return
+        profile.name = new_name
+        self.store.upsert_profile(profile)
+        self.profiles[row] = profile
+        item = self.profile_list.item(row)
+        if item:
+            item.setText(self._profile_list_text(profile))
+        self._set_status(f"配置名称已更新为：{new_name}")
 
     def _copy_diagnostic(self) -> None:
         QApplication.clipboard().setText(self.diagnostic_box.toPlainText())
