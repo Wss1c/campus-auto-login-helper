@@ -24,6 +24,22 @@
 
 ## 使用方式
 
+### 下载绿色版
+
+在仓库右侧或顶部进入 **Releases**，下载最新版本中的：
+
+```text
+CampusAutoLogin-v0.1.0-windows-x64-portable.zip
+```
+
+下载后解压，双击运行：
+
+```text
+CampusAutoLogin\CampusAutoLogin.exe
+```
+
+绿色版不会写入安装目录以外的系统位置；运行后会在程序目录下生成本地 `data` 文件夹，用于保存配置和日志。密码使用 Windows DPAPI 加密保存，复制到其他电脑后需要重新输入密码。
+
 ### 开发环境运行
 
 ```powershell
