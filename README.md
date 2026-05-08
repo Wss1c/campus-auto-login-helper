@@ -2,8 +2,6 @@
 
 校园网自动登录助手是一个 Windows 绿色版桌面客户端，用于识别常见校园网 Web Portal 协议，并在识别成功后保存登录配置、手动登录或后台常驻自动登录。
 
-> 当前仓库建议先保持私有，等协议适配、稳定性和打包流程调试完整后再切换为公开。
-
 ## 功能
 
 - 首次使用先输入校园网登录页网址，软件自动识别协议。
@@ -39,6 +37,11 @@ CampusAutoLogin\CampusAutoLogin.exe
 ```
 
 绿色版不会写入安装目录以外的系统位置；运行后会在程序目录下生成本地 `data` 文件夹，用于保存配置和日志。密码使用 Windows DPAPI 加密保存，复制到其他电脑后需要重新输入密码。
+
+也可以使用网盘镜像下载：
+
+- 夸克网盘：[https://pan.quark.cn/s/a7a50bb94d82](https://pan.quark.cn/s/a7a50bb94d82)，提取码：`WHV9`
+- 百度网盘：[https://pan.baidu.com/s/1cqEMer7vTZ2oJpWqILQm9A](https://pan.baidu.com/s/1cqEMer7vTZ2oJpWqILQm9A)，提取码：`5yup`
 
 ### 开发环境运行
 
@@ -124,4 +127,4 @@ python -m unittest discover -s tests
 
 ## 仓库状态
 
-当前项目仍在调试阶段，建议先使用私有仓库协作。确认稳定后，可在 GitHub 仓库设置中将可见性改为 Public。
+当前项目仍处于早期调试阶段，欢迎根据实际校园网环境提交诊断信息、问题反馈和协议适配建议。
