@@ -115,14 +115,23 @@ QGroupBox::title {
     padding: 0 6px;
     color: #283247;
 }
-QLineEdit, QComboBox {
+QLineEdit, QComboBox, QSpinBox {
     background: #ffffff;
+    color: #111827;
     border: 1px solid #cfd8e6;
     border-radius: 6px;
     padding: 7px 9px;
     min-height: 22px;
 }
-QLineEdit:focus, QComboBox:focus, QTextEdit:focus {
+QSpinBox::up-button, QSpinBox::down-button {
+    background: #eef3fb;
+    border-left: 1px solid #cfd8e6;
+    width: 18px;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background: #dce8f8;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus {
     border: 1px solid #2f80ed;
 }
 QPushButton {
@@ -252,8 +261,8 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
     def __init__(self, minimized: bool = False, recovery_window: bool = False) -> None:
         super().__init__()
         self.setWindowTitle("校园网自动登录")
-        self.resize(940, 660)
-        self.setMinimumSize(820, 560)
+        self.resize(1180, 760)
+        self.setMinimumSize(1040, 680)
         self.setStyleSheet(APP_STYLES)
         self.store = ConfigStore(data_dir())
         self.logger = get_logger(logs_dir())
@@ -296,6 +305,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
 
     def _make_button(self, text: str, kind: str = "", icon_name: str = "") -> QPushButton:
         button = QPushButton(text)
+        button.setMinimumWidth(88)
         if kind:
             button.setObjectName(f"{kind}Button")
         if icon_name:
@@ -452,10 +462,12 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.check_interval_spin = QSpinBox()
         self.check_interval_spin.setRange(10, 600)
         self.check_interval_spin.setSuffix(" 秒")
+        self.check_interval_spin.setMinimumWidth(104)
         self.check_interval_spin.valueChanged.connect(self._profile_options_changed)
         self.login_interval_spin = QSpinBox()
         self.login_interval_spin.setRange(1, 72)
         self.login_interval_spin.setSuffix(" 小时")
+        self.login_interval_spin.setMinimumWidth(104)
         self.login_interval_spin.valueChanged.connect(self._profile_options_changed)
         self.check_urls_input = QTextEdit()
         self.check_urls_input.setPlaceholderText("每行一个检测地址")
@@ -914,10 +926,10 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
     def _export_diagnostics(self) -> None:
         try:
             output = export_diagnostic_bundle(
-                data_dir() / "diagnostics",
-                self.profiles,
-                logs_dir(),
-                self.log_view.toPlainText(),
+                output_dir=data_dir() / "diagnostics",
+                profiles=self.profiles,
+                log_dir=logs_dir(),
+                ui_log=self.log_view.toPlainText(),
             )
             self._set_status(f"诊断包已导出：{output}")
             QMessageBox.information(self, "诊断包已导出", f"文件位置：\n{output}")

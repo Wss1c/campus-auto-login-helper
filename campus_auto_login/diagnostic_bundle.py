@@ -25,7 +25,6 @@ def _safe_profile(profile: Profile) -> dict:
 
 
 def export_diagnostic_bundle(
-    *,
     output_dir: Path,
     profiles: Iterable[Profile],
     log_dir: Path,

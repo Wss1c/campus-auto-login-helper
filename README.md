@@ -35,7 +35,7 @@
 在仓库右侧或顶部进入 **Releases**，下载最新版本中的：
 
 ```text
-CampusAutoLogin-v0.2.1-windows-x64-portable.zip
+CampusAutoLogin-v0.2.2-windows-x64-portable.zip
 ```
 
 下载后解压，双击运行：
