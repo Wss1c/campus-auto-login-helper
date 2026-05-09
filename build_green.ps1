@@ -35,6 +35,9 @@ if (-not $SkipInstall) {
     --name CampusAutoLogin `
     --add-data "README.md;." `
     main.py
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller failed with exit code $LASTEXITCODE"
+}
 
 if (Test-Path -LiteralPath $BackupDir) {
     Copy-Item -LiteralPath $BackupDir -Destination $DataDir -Recurse -Force

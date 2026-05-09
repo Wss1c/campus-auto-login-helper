@@ -8,6 +8,7 @@ import requests
 
 from .adapters import get_adapter
 from .models import Credentials, DetectionResult, LoginResult, Profile
+from .power import AwakeGuard
 from .utils import USER_AGENT
 
 
@@ -25,12 +26,14 @@ class AutoLoginService:
         self.status_callback = status_callback
         self._stop = threading.Event()
         self._wake = threading.Event()
+        self._force_check = threading.Event()
         self._paused = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_login_ts = 0.0
         self._retry_after_ts = 0.0
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": USER_AGENT})
+        self._awake_guard = AwakeGuard()
 
     @property
     def running(self) -> bool:
@@ -44,6 +47,11 @@ class AutoLoginService:
         if self.running:
             return
         self._stop.clear()
+        if self.profile.prevent_sleep_enabled:
+            if self._awake_guard.enable():
+                self._emit("已启用防睡眠，常驻期间电脑不会自动睡眠/休眠")
+            else:
+                self._emit("防睡眠启用失败，当前系统可能不支持")
         self._thread = threading.Thread(target=self._run, name="AutoLoginService", daemon=True)
         self._thread.start()
         self._emit("常驻已启动")
@@ -53,6 +61,7 @@ class AutoLoginService:
         self._wake.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
+        self._awake_guard.disable()
         self._emit("常驻已停止")
 
     def pause(self, paused: bool) -> None:
@@ -63,6 +72,20 @@ class AutoLoginService:
             self._paused.clear()
             self._wake.set()
             self._emit("已恢复自动登录")
+
+    def request_check(self, reason: str = "立即检查网络") -> None:
+        self._emit(reason)
+        self._force_check.set()
+        self._wake.set()
+
+    def update_profile(self, profile: Profile) -> None:
+        self.profile = profile
+        if profile.prevent_sleep_enabled and not self._awake_guard.enabled:
+            if self._awake_guard.enable():
+                self._emit("已启用防睡眠")
+        elif not profile.prevent_sleep_enabled and self._awake_guard.enabled:
+            self._awake_guard.disable()
+            self._emit("已关闭防睡眠")
 
     def login_now(self) -> LoginResult:
         result = self._login()
@@ -89,9 +112,16 @@ class AutoLoginService:
                     self._wait(5)
                     continue
                 now = time.time()
-                if now >= self._retry_after_ts and self._needs_login(now):
+                forced = self._force_check.is_set()
+                self._force_check.clear()
+                if forced:
+                    if self._needs_login(now):
+                        self.login_now()
+                    else:
+                        self._emit("网络检测正常，无需重新登录")
+                elif now >= self._retry_after_ts and self._needs_login(now):
                     self.login_now()
-                self._wait(30)
+                self._wait(max(5, self.profile.check_interval_seconds))
             except Exception as exc:
                 self.logger.exception("Background auto-login loop failed")
                 self._emit(f"常驻自动登录出错：{exc}")
@@ -103,16 +133,17 @@ class AutoLoginService:
         self._wake.clear()
 
     def _needs_login(self, now: float) -> bool:
-        if not self._last_login_ts:
-            return True
-        if now - self._last_login_ts >= self.profile.login_interval_seconds:
-            return True
         adapter = get_adapter(self.profile.adapter_id)
-        return not adapter.check_status(
+        online = adapter.check_status(
             self._session,
             self._detection(),
-            self.profile.check_url,
+            self.profile.check_urls or [self.profile.check_url],
         )
+        if not self._last_login_ts:
+            return not online
+        if now - self._last_login_ts >= self.profile.login_interval_seconds:
+            return True
+        return not online
 
     def _login(self) -> LoginResult:
         adapter = get_adapter(self.profile.adapter_id)

@@ -1,14 +1,17 @@
 import unittest
 
+import requests
+
 from campus_auto_login.adapters.drcom import DrComEportalAdapter
 from campus_auto_login.detector import DetectionEngine
-from campus_auto_login.models import Credentials, DetectionResult, PortalPage
+from campus_auto_login.models import Credentials, DetectionResult, PortalPage, Profile
 
 
 class FakeResponse:
-    def __init__(self, text, status_code=200):
+    def __init__(self, text, status_code=200, url="https://www.baidu.com/"):
         self.text = text
         self.status_code = status_code
+        self.url = url
 
 
 class FakeSession:
@@ -19,6 +22,19 @@ class FakeSession:
     def get(self, url, **kwargs):
         self.last_request = (url, kwargs)
         return self.response
+
+
+class FakeSequenceSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+
+    def get(self, url, **kwargs):
+        self.requests.append((url, kwargs))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 class DetectionTests(unittest.TestCase):
@@ -136,6 +152,86 @@ class DetectionTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertIn("已在线", result.message)
+
+    def test_check_status_uses_next_url_after_failure(self):
+        adapter = DrComEportalAdapter()
+        detection = DetectionResult(
+            supported=True,
+            adapter_id="drcom_eportal",
+            adapter_name="Dr.COM / ePortal",
+            score=100,
+            gateway="http://192.0.2.1:801",
+        )
+        session = FakeSequenceSession(
+            [
+                requests.Timeout("first url failed"),
+                FakeResponse("ok", 204, "http://www.msftconnecttest.com/connecttest.txt"),
+            ]
+        )
+
+        self.assertTrue(
+            adapter.check_status(
+                session,
+                detection,
+                [
+                    "https://www.baidu.com",
+                    "http://www.msftconnecttest.com/connecttest.txt",
+                ],
+            )
+        )
+        self.assertEqual(len(session.requests), 2)
+
+    def test_check_status_rejects_gateway_redirect(self):
+        adapter = DrComEportalAdapter()
+        detection = DetectionResult(
+            supported=True,
+            adapter_id="drcom_eportal",
+            adapter_name="Dr.COM / ePortal",
+            score=100,
+            gateway="http://192.0.2.1:801",
+        )
+        session = FakeSequenceSession(
+            [FakeResponse("<title>portal</title>", 200, "http://192.0.2.1:801/eportal/")]
+        )
+
+        self.assertFalse(adapter.check_status(session, detection, ["https://www.baidu.com"]))
+
+    def test_check_status_rejects_captive_marker(self):
+        adapter = DrComEportalAdapter()
+        detection = DetectionResult(
+            supported=True,
+            adapter_id="drcom_eportal",
+            adapter_name="Dr.COM / ePortal",
+            score=100,
+            gateway="http://192.0.2.1:801",
+        )
+        session = FakeSequenceSession(
+            [FakeResponse("<script>var user_account='';</script>", 200, "https://www.baidu.com/")]
+        )
+
+        self.assertFalse(adapter.check_status(session, detection, ["https://www.baidu.com"]))
+
+    def test_profile_migrates_old_single_check_url(self):
+        profile = Profile.from_dict(
+            {
+                "id": "p1",
+                "name": "test",
+                "login_url": "http://192.0.2.1/",
+                "adapter_id": "drcom_eportal",
+                "adapter_name": "Dr.COM / ePortal",
+                "gateway": "http://192.0.2.1:801",
+                "login_endpoint": "http://192.0.2.1:801/eportal/portal/login",
+                "logout_endpoint": "http://192.0.2.1:801/eportal/portal/logout",
+                "username": "u",
+                "encrypted_password": "p",
+                "check_url": "http://example.test/check",
+            }
+        )
+
+        self.assertEqual(profile.check_url, "http://example.test/check")
+        self.assertEqual(profile.check_urls, ["http://example.test/check"])
+        self.assertEqual(profile.check_interval_seconds, 30)
+        self.assertTrue(profile.resume_reconnect_enabled)
 
 
 if __name__ == "__main__":

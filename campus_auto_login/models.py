@@ -6,12 +6,33 @@ from typing import Any
 
 
 DEFAULT_LOGIN_INTERVAL_SECONDS = 23 * 60 * 60
+DEFAULT_CHECK_INTERVAL_SECONDS = 30
 DEFAULT_CHECK_URL = "https://www.baidu.com"
+DEFAULT_CHECK_URLS = [
+    "https://www.baidu.com",
+    "http://www.msftconnecttest.com/connecttest.txt",
+    "http://connectivitycheck.gstatic.com/generate_204",
+]
 DETECTION_THRESHOLD = 70
 
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def default_check_urls() -> list[str]:
+    return list(DEFAULT_CHECK_URLS)
+
+
+def normalize_check_urls(value: Any) -> list[str]:
+    if isinstance(value, str):
+        items = [item.strip() for item in value.replace("\r", "\n").split("\n")]
+    elif isinstance(value, (list, tuple, set)):
+        items = [str(item).strip() for item in value]
+    else:
+        items = []
+    urls = [item for item in items if item]
+    return urls or default_check_urls()
 
 
 @dataclass(slots=True)
@@ -86,9 +107,13 @@ class Profile:
     operator_label: str = "campus"
     operator_suffix: str = ""
     check_url: str = DEFAULT_CHECK_URL
+    check_urls: list[str] = field(default_factory=default_check_urls)
+    check_interval_seconds: int = DEFAULT_CHECK_INTERVAL_SECONDS
     login_interval_seconds: int = DEFAULT_LOGIN_INTERVAL_SECONDS
     resident_enabled: bool = False
     startup_enabled: bool = False
+    prevent_sleep_enabled: bool = False
+    resume_reconnect_enabled: bool = True
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
 
@@ -107,15 +132,21 @@ class Profile:
             "operator_label": self.operator_label,
             "operator_suffix": self.operator_suffix,
             "check_url": self.check_url,
+            "check_urls": self.check_urls,
+            "check_interval_seconds": self.check_interval_seconds,
             "login_interval_seconds": self.login_interval_seconds,
             "resident_enabled": self.resident_enabled,
             "startup_enabled": self.startup_enabled,
+            "prevent_sleep_enabled": self.prevent_sleep_enabled,
+            "resume_reconnect_enabled": self.resume_reconnect_enabled,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Profile":
+        check_urls = normalize_check_urls(data.get("check_urls") or data.get("check_url"))
+        check_url = str(data.get("check_url") or check_urls[0] or DEFAULT_CHECK_URL)
         return cls(
             id=str(data["id"]),
             name=str(data.get("name") or "校园网配置"),
@@ -129,12 +160,18 @@ class Profile:
             encrypted_password=str(data.get("encrypted_password") or ""),
             operator_label=str(data.get("operator_label") or "campus"),
             operator_suffix=str(data.get("operator_suffix") or ""),
-            check_url=str(data.get("check_url") or DEFAULT_CHECK_URL),
+            check_url=check_url,
+            check_urls=check_urls,
+            check_interval_seconds=int(
+                data.get("check_interval_seconds") or DEFAULT_CHECK_INTERVAL_SECONDS
+            ),
             login_interval_seconds=int(
                 data.get("login_interval_seconds") or DEFAULT_LOGIN_INTERVAL_SECONDS
             ),
             resident_enabled=bool(data.get("resident_enabled", False)),
             startup_enabled=bool(data.get("startup_enabled", False)),
+            prevent_sleep_enabled=bool(data.get("prevent_sleep_enabled", False)),
+            resume_reconnect_enabled=bool(data.get("resume_reconnect_enabled", True)),
             created_at=str(data.get("created_at") or utc_now_iso()),
             updated_at=str(data.get("updated_at") or utc_now_iso()),
         )

@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+import time
 from datetime import datetime
 
 import requests
 
 from .adapters import get_adapter
 from .config_store import ConfigStore
+from .diagnostic_bundle import export_diagnostic_bundle
 from .detector import DetectionEngine, DetectionOutcome
 from .diagnostics import diagnostic_to_text
 from .lock import SingleInstanceLock
 from .logger import get_logger
-from .models import Credentials, DetectionResult, LoginResult, Profile
+from .models import Credentials, DetectionResult, LoginResult, Profile, normalize_check_urls
 from .paths import data_dir, logs_dir
 from .service import AutoLoginService
 from .startup import is_startup_enabled, set_startup
 from .startup_log import log_startup_event, log_startup_exception, show_native_error
+from .update_check import check_latest_release
 from .utils import USER_AGENT
 
 
@@ -39,6 +43,7 @@ try:
         QMessageBox,
         QInputDialog,
         QPushButton,
+        QSpinBox,
         QStackedWidget,
         QStyle,
         QSystemTrayIcon,
@@ -258,10 +263,12 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.status_messages: list[str] = []
         self.recovery_window = recovery_window
         self.close_prompt_seen = False
+        self._loading_profile_options = False
         self.ui_bridge = UiBridge()
         self.ui_bridge.status_requested.connect(self._set_status)
         self.app_icon = make_app_icon()
         self.setWindowIcon(self.app_icon)
+        self._last_resume_tick = time.monotonic()
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -282,6 +289,10 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
 
         if minimized and self.profiles and self.tray_available:
             QTimer.singleShot(100, self.hide)
+
+        self.resume_timer = QTimer(self)
+        self.resume_timer.timeout.connect(self._watch_resume)
+        self.resume_timer.start(15000)
 
     def _make_button(self, text: str, kind: str = "", icon_name: str = "") -> QPushButton:
         button = QPushButton(text)
@@ -434,12 +445,40 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.resident_checkbox.stateChanged.connect(self._resident_changed)
         self.startup_checkbox = QCheckBox("开机自启")
         self.startup_checkbox.stateChanged.connect(self._startup_changed)
+        self.prevent_sleep_checkbox = QCheckBox("常驻时防止睡眠/休眠")
+        self.prevent_sleep_checkbox.stateChanged.connect(self._profile_options_changed)
+        self.resume_reconnect_checkbox = QCheckBox("唤醒后立即检查")
+        self.resume_reconnect_checkbox.stateChanged.connect(self._profile_options_changed)
+        self.check_interval_spin = QSpinBox()
+        self.check_interval_spin.setRange(10, 600)
+        self.check_interval_spin.setSuffix(" 秒")
+        self.check_interval_spin.valueChanged.connect(self._profile_options_changed)
+        self.login_interval_spin = QSpinBox()
+        self.login_interval_spin.setRange(1, 72)
+        self.login_interval_spin.setSuffix(" 小时")
+        self.login_interval_spin.valueChanged.connect(self._profile_options_changed)
+        self.check_urls_input = QTextEdit()
+        self.check_urls_input.setPlaceholderText("每行一个检测地址")
+        self.check_urls_input.setMaximumHeight(72)
+        self.check_urls_input.textChanged.connect(self._profile_options_changed)
         self.login_button = self._make_button("立即登录", "primary", "SP_MediaPlay")
         self.login_button.clicked.connect(self._login_now)
         self.logout_button = self._make_button("注销", "danger", "SP_DialogDiscardButton")
         self.logout_button.clicked.connect(self._logout_now)
         self.pause_button = self._make_button("暂停", icon_name="SP_MediaPause")
         self.pause_button.clicked.connect(self._toggle_pause)
+        self.check_now_button = self._make_button("检测网络", icon_name="SP_BrowserReload")
+        self.check_now_button.clicked.connect(self._check_network_now)
+        self.export_diag_button = self._make_button("导出诊断包", icon_name="SP_DriveHDIcon")
+        self.export_diag_button.clicked.connect(self._export_diagnostics)
+        self.copy_log_button = self._make_button("复制日志")
+        self.copy_log_button.clicked.connect(self._copy_ui_log)
+        self.clear_log_button = self._make_button("清空显示")
+        self.clear_log_button.clicked.connect(self._clear_ui_log)
+        self.open_logs_button = self._make_button("打开日志目录", icon_name="SP_DirOpenIcon")
+        self.open_logs_button.clicked.connect(self._open_logs_dir)
+        self.update_button = self._make_button("检查更新", icon_name="SP_BrowserReload")
+        self.update_button.clicked.connect(self._check_updates)
         self.log_view = QTextEdit()
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
@@ -457,10 +496,13 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         switches.setSpacing(16)
         switches.addWidget(self.resident_checkbox)
         switches.addWidget(self.startup_checkbox)
+        switches.addWidget(self.prevent_sleep_checkbox)
+        switches.addWidget(self.resume_reconnect_checkbox)
         switches.addStretch(1)
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
         action_row.addWidget(self.login_button)
+        action_row.addWidget(self.check_now_button)
         action_row.addWidget(self.logout_button)
         action_row.addWidget(self.pause_button)
         rename_row = QHBoxLayout()
@@ -472,6 +514,16 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         controls.addWidget(QLabel("配置名称"))
         controls.addLayout(rename_row)
         controls.addLayout(switches)
+        interval_row = QHBoxLayout()
+        interval_row.setSpacing(10)
+        interval_row.addWidget(QLabel("检测间隔"))
+        interval_row.addWidget(self.check_interval_spin)
+        interval_row.addWidget(QLabel("定期重登"))
+        interval_row.addWidget(self.login_interval_spin)
+        interval_row.addStretch(1)
+        controls.addLayout(interval_row)
+        controls.addWidget(QLabel("断网检测地址"))
+        controls.addWidget(self.check_urls_input)
         controls.addLayout(action_row)
         controls.addStretch(1)
 
@@ -480,7 +532,16 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         right.addWidget(controls_panel)
         log_title = QLabel("运行日志")
         log_title.setObjectName("sectionTitle")
-        right.addWidget(log_title)
+        log_buttons = QHBoxLayout()
+        log_buttons.setSpacing(8)
+        log_buttons.addWidget(log_title)
+        log_buttons.addStretch(1)
+        log_buttons.addWidget(self.copy_log_button)
+        log_buttons.addWidget(self.clear_log_button)
+        log_buttons.addWidget(self.open_logs_button)
+        log_buttons.addWidget(self.export_diag_button)
+        log_buttons.addWidget(self.update_button)
+        right.addLayout(log_buttons)
         right.addWidget(self.log_view, 1)
 
         content.addWidget(profile_group, 1)
@@ -498,13 +559,23 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         show_action.triggered.connect(self.reveal)
         login_action = QAction("立即登录", self)
         login_action.triggered.connect(self._login_now)
+        check_action = QAction("检测网络", self)
+        check_action.triggered.connect(self._check_network_now)
         pause_action = QAction("暂停/恢复", self)
         pause_action.triggered.connect(self._toggle_pause)
+        logs_action = QAction("打开日志目录", self)
+        logs_action.triggered.connect(self._open_logs_dir)
+        diagnostics_action = QAction("导出诊断包", self)
+        diagnostics_action.triggered.connect(self._export_diagnostics)
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(self._quit_app)
         menu.addAction(show_action)
         menu.addAction(login_action)
+        menu.addAction(check_action)
         menu.addAction(pause_action)
+        menu.addSeparator()
+        menu.addAction(logs_action)
+        menu.addAction(diagnostics_action)
         menu.addSeparator()
         menu.addAction(quit_action)
         self.tray.setContextMenu(menu)
@@ -561,13 +632,30 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         profile = self._current_profile()
         if not profile:
             return
+        option_widgets = [
+            self.saved_name_input,
+            self.resident_checkbox,
+            self.startup_checkbox,
+            self.prevent_sleep_checkbox,
+            self.resume_reconnect_checkbox,
+            self.check_interval_spin,
+            self.login_interval_spin,
+            self.check_urls_input,
+        ]
+        self._loading_profile_options = True
+        for widget in option_widgets:
+            widget.blockSignals(True)
         self.saved_name_input.setText(profile.name)
-        self.resident_checkbox.blockSignals(True)
-        self.startup_checkbox.blockSignals(True)
         self.resident_checkbox.setChecked(profile.resident_enabled)
         self.startup_checkbox.setChecked(profile.startup_enabled or is_startup_enabled())
-        self.resident_checkbox.blockSignals(False)
-        self.startup_checkbox.blockSignals(False)
+        self.prevent_sleep_checkbox.setChecked(profile.prevent_sleep_enabled)
+        self.resume_reconnect_checkbox.setChecked(profile.resume_reconnect_enabled)
+        self.check_interval_spin.setValue(max(10, int(profile.check_interval_seconds)))
+        self.login_interval_spin.setValue(max(1, int(profile.login_interval_seconds // 3600)))
+        self.check_urls_input.setPlainText("\n".join(normalize_check_urls(profile.check_urls or profile.check_url)))
+        for widget in option_widgets:
+            widget.blockSignals(False)
+        self._loading_profile_options = False
         self._stop_service()
         if profile.resident_enabled:
             if not self._start_service(profile):
@@ -678,6 +766,22 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         else:
             self._stop_service()
 
+    def _profile_options_changed(self) -> None:
+        if self._loading_profile_options:
+            return
+        profile = self._current_profile()
+        if not profile:
+            return
+        profile.prevent_sleep_enabled = self.prevent_sleep_checkbox.isChecked()
+        profile.resume_reconnect_enabled = self.resume_reconnect_checkbox.isChecked()
+        profile.check_interval_seconds = int(self.check_interval_spin.value())
+        profile.login_interval_seconds = int(self.login_interval_spin.value()) * 60 * 60
+        profile.check_urls = normalize_check_urls(self.check_urls_input.toPlainText())
+        profile.check_url = profile.check_urls[0]
+        self.store.upsert_profile(profile)
+        if self.service and self.service.running:
+            self.service.update_profile(profile)
+
     def _startup_changed(self) -> None:
         profile = self._current_profile()
         if not profile:
@@ -749,9 +853,110 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
 
     def _toggle_pause(self) -> None:
         if not self.service:
+            self._set_status("常驻未启动，无法暂停")
             return
         self.service.pause(not self.service.paused)
         self.pause_button.setText("恢复" if self.service.paused else "暂停")
+
+    def _check_network_now(self) -> None:
+        profile = self._current_profile()
+        if not profile:
+            return
+        try:
+            if self.service and self.service.running:
+                self.service.request_check("手动触发网络检测")
+                return
+            session = requests.Session()
+            session.headers.update({"User-Agent": USER_AGENT})
+            adapter = get_adapter(profile.adapter_id)
+            online = adapter.check_status(
+                session,
+                self._profile_detection(profile),
+                profile.check_urls or [profile.check_url],
+            )
+            if online:
+                self._set_status("网络检测正常，无需重新登录")
+                return
+            self._set_status("检测到可能已断网，正在尝试登录")
+            result = self._login_once(profile)
+            if result is None:
+                return
+            self._set_status(result.message)
+            if not result.success:
+                QMessageBox.warning(
+                    self,
+                    "网络检测后登录失败",
+                    f"{result.message}\n\n{result.raw_summary[:300]}",
+                )
+        except Exception as exc:
+            self._handle_runtime_error("网络检测失败", exc)
+
+    def _copy_ui_log(self) -> None:
+        QApplication.clipboard().setText(self.log_view.toPlainText())
+        self._set_status("运行日志已复制")
+
+    def _clear_ui_log(self) -> None:
+        self.status_messages.clear()
+        self.log_view.clear()
+        self._set_status("运行日志显示已清空")
+
+    def _open_logs_dir(self) -> None:
+        path = logs_dir()
+        try:
+            if sys.platform.startswith("win"):
+                subprocess.Popen(["explorer", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+            self._set_status(f"已打开日志目录：{path}")
+        except Exception as exc:
+            self._handle_runtime_error("打开日志目录失败", exc)
+
+    def _export_diagnostics(self) -> None:
+        try:
+            output = export_diagnostic_bundle(
+                data_dir() / "diagnostics",
+                self.profiles,
+                logs_dir(),
+                self.log_view.toPlainText(),
+            )
+            self._set_status(f"诊断包已导出：{output}")
+            QMessageBox.information(self, "诊断包已导出", f"文件位置：\n{output}")
+        except Exception as exc:
+            self._handle_runtime_error("导出诊断包失败", exc)
+
+    def _check_updates(self) -> None:
+        self.update_button.setEnabled(False)
+        self._set_status("正在检查更新...")
+        QApplication.processEvents()
+        try:
+            result = check_latest_release()
+            self._set_status(result.message)
+            if result.has_update and result.url:
+                QMessageBox.information(
+                    self,
+                    "发现新版本",
+                    f"{result.message}\n\n下载页面：\n{result.url}",
+                )
+            else:
+                QMessageBox.information(self, "检查更新", result.message)
+        finally:
+            self.update_button.setEnabled(True)
+
+    def _watch_resume(self) -> None:
+        now = time.monotonic()
+        elapsed = now - self._last_resume_tick
+        self._last_resume_tick = now
+        if elapsed < 90:
+            return
+        profile = self._current_profile()
+        if (
+            profile
+            and profile.resume_reconnect_enabled
+            and self.service
+            and self.service.running
+            and not self.service.paused
+        ):
+            self.service.request_check("检测到电脑可能刚从睡眠/休眠恢复，立即检查网络")
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)

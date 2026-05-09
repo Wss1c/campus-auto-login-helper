@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .models import Profile, utc_now_iso
+from .models import Profile, default_check_urls, utc_now_iso
 from .security import CredentialProtector
 
 
@@ -61,7 +61,9 @@ class ConfigStore:
         password: str,
         operator_label: str,
         operator_suffix: str,
+        check_urls: list[str] | None = None,
     ) -> Profile:
+        urls = check_urls or default_check_urls()
         return Profile(
             id=str(uuid.uuid4()),
             name=name,
@@ -75,6 +77,8 @@ class ConfigStore:
             encrypted_password=self.protector.encrypt(password),
             operator_label=operator_label,
             operator_suffix=operator_suffix,
+            check_urls=urls,
+            check_url=urls[0],
         )
 
     def decrypt_password(self, profile: Profile) -> str:
