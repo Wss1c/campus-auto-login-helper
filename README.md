@@ -35,7 +35,7 @@
 在仓库右侧或顶部进入 **Releases**，下载最新版本中的：
 
 ```text
-CampusAutoLogin-v0.2.0-windows-x64-portable.zip
+CampusAutoLogin-v0.2.1-windows-x64-portable.zip
 ```
 
 下载后解压，双击运行：
@@ -86,6 +86,8 @@ python main.py
 ```powershell
 .\build_green.ps1 -PythonPath "C:\Users\26354\AppData\Local\Programs\Python\Python312\python.exe"
 ```
+
+打包建议使用官方 Python 3.12 x64。部分 conda 环境可能导致 PyInstaller 漏带 `_ctypes` 依赖，打出的绿色包会在启动时报 “DLL load failed while importing _ctypes”。
 
 打包完成后，绿色版目录位于：
 

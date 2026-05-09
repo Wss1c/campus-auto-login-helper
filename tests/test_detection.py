@@ -1,8 +1,10 @@
 import unittest
+from unittest.mock import patch
 
 import requests
 
 from campus_auto_login.adapters.drcom import DrComEportalAdapter
+from campus_auto_login.power import AwakeGuard
 from campus_auto_login.detector import DetectionEngine
 from campus_auto_login.models import Credentials, DetectionResult, PortalPage, Profile
 
@@ -232,6 +234,19 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(profile.check_urls, ["http://example.test/check"])
         self.assertEqual(profile.check_interval_seconds, 30)
         self.assertTrue(profile.resume_reconnect_enabled)
+
+    def test_awake_guard_does_not_crash_without_ctypes(self):
+        real_import = __import__
+
+        def blocked_import(name, *args, **kwargs):
+            if name == "ctypes":
+                raise ImportError("missing _ctypes")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=blocked_import):
+            guard = AwakeGuard()
+            self.assertFalse(guard.enable())
+            guard.disable()
 
 
 if __name__ == "__main__":

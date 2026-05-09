@@ -10,6 +10,19 @@ $OutDir = Join-Path $Root "dist\CampusAutoLogin"
 $DataDir = Join-Path $OutDir "data"
 $BackupDir = Join-Path $Root ".build_data_backup"
 
+if ($PythonPath -eq "python") {
+    $LocalPython312 = Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"
+    if (Test-Path -LiteralPath $LocalPython312) {
+        $PythonPath = $LocalPython312
+    }
+}
+
+Write-Host ("Using Python: {0}" -f $PythonPath)
+& $PythonPath -c "import ctypes, PySide6, PyInstaller, requests; import win32crypt; print('build preflight ok')"
+if ($LASTEXITCODE -ne 0) {
+    throw "Build Python preflight failed. Use a complete Python installation, preferably the official Python 3.12 x64 runtime."
+}
+
 if (Test-Path -LiteralPath $BackupDir) {
     $resolvedBackup = (Resolve-Path -LiteralPath $BackupDir).Path
     $resolvedRoot = (Resolve-Path -LiteralPath $Root).Path
