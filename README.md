@@ -48,8 +48,8 @@ CampusAutoLogin\CampusAutoLogin.exe
 
 也可以使用网盘镜像下载：
 
-- 夸克网盘：[https://pan.quark.cn/s/a7a50bb94d82](https://pan.quark.cn/s/a7a50bb94d82)，提取码：`WHV9`
-- 百度网盘：[https://pan.baidu.com/s/1cqEMer7vTZ2oJpWqILQm9A](https://pan.baidu.com/s/1cqEMer7vTZ2oJpWqILQm9A)，提取码：`5yup`
+- 夸克网盘：[https://pan.quark.cn/s/60f8c714e21f](https://pan.quark.cn/s/60f8c714e21f)，提取码：`NUYP`
+- 百度网盘：[https://pan.baidu.com/s/19yV5blA-Aym847HX2wJkww](https://pan.baidu.com/s/19yV5blA-Aym847HX2wJkww)，提取码：`1v9n`
 
 ### 开发环境运行
 
