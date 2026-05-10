@@ -25,7 +25,7 @@ from .utils import USER_AGENT
 
 
 try:
-    from PySide6.QtCore import QObject, Qt, QTimer, Signal
+    from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, QTimer, Signal
     from PySide6.QtGui import QAction, QColor, QCloseEvent, QIcon, QPainter, QPen, QPixmap
     from PySide6.QtWidgets import (
         QApplication,
@@ -52,6 +52,7 @@ try:
         QWidget,
     )
 except ImportError:  # pragma: no cover - exercised only without GUI deps
+    QAbstractNativeEventFilter = object
     QApplication = None
     QMainWindow = object
     QObject = object
@@ -257,6 +258,39 @@ class UiBridge(QObject):
     status_requested = Signal(str)
 
 
+class PowerEventFilter(QAbstractNativeEventFilter):  # type: ignore[misc]
+    WM_POWERBROADCAST = 0x0218
+    RESUME_EVENTS = {0x0006, 0x0007, 0x0012}
+
+    def __init__(self, callback) -> None:
+        super().__init__()
+        self.callback = callback
+
+    def nativeEventFilter(self, event_type, message):  # pragma: no cover - Qt/Windows callback
+        if not sys.platform.startswith("win"):
+            return False, 0
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MSG(ctypes.Structure):
+                _fields_ = [
+                    ("hwnd", wintypes.HWND),
+                    ("message", wintypes.UINT),
+                    ("wParam", wintypes.WPARAM),
+                    ("lParam", wintypes.LPARAM),
+                    ("time", wintypes.DWORD),
+                    ("pt", wintypes.POINT),
+                ]
+
+            msg = MSG.from_address(int(message))
+            if msg.message == self.WM_POWERBROADCAST and msg.wParam in self.RESUME_EVENTS:
+                self.callback("检测到 Windows 唤醒事件，稍后立即检查网络")
+        except Exception:
+            return False, 0
+        return False, 0
+
+
 class MainWindow(QMainWindow):  # type: ignore[misc]
     def __init__(self, minimized: bool = False, recovery_window: bool = False) -> None:
         super().__init__()
@@ -278,6 +312,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.app_icon = make_app_icon()
         self.setWindowIcon(self.app_icon)
         self._last_resume_tick = time.monotonic()
+        self.power_event_filter: PowerEventFilter | None = None
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -302,6 +337,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.resume_timer = QTimer(self)
         self.resume_timer.timeout.connect(self._watch_resume)
         self.resume_timer.start(15000)
+        self._install_power_event_filter()
 
     def _make_button(self, text: str, kind: str = "", icon_name: str = "") -> QPushButton:
         button = QPushButton(text)
@@ -479,6 +515,8 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.logout_button.clicked.connect(self._logout_now)
         self.pause_button = self._make_button("暂停", icon_name="SP_MediaPause")
         self.pause_button.clicked.connect(self._toggle_pause)
+        self.health_button = self._make_button("健康检查", icon_name="SP_DialogApplyButton")
+        self.health_button.clicked.connect(self._run_health_check)
         self.check_now_button = self._make_button("检测网络", icon_name="SP_BrowserReload")
         self.check_now_button.clicked.connect(self._check_network_now)
         self.export_diag_button = self._make_button("导出诊断包", icon_name="SP_DriveHDIcon")
@@ -514,6 +552,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
         action_row.addWidget(self.login_button)
+        action_row.addWidget(self.health_button)
         action_row.addWidget(self.check_now_button)
         action_row.addWidget(self.logout_button)
         action_row.addWidget(self.pause_button)
@@ -571,6 +610,8 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         show_action.triggered.connect(self.reveal)
         login_action = QAction("立即登录", self)
         login_action.triggered.connect(self._login_now)
+        health_action = QAction("健康检查", self)
+        health_action.triggered.connect(self._run_health_check)
         check_action = QAction("检测网络", self)
         check_action.triggered.connect(self._check_network_now)
         pause_action = QAction("暂停/恢复", self)
@@ -583,6 +624,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         quit_action.triggered.connect(self._quit_app)
         menu.addAction(show_action)
         menu.addAction(login_action)
+        menu.addAction(health_action)
         menu.addAction(check_action)
         menu.addAction(pause_action)
         menu.addSeparator()
@@ -870,6 +912,83 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.service.pause(not self.service.paused)
         self.pause_button.setText("恢复" if self.service.paused else "暂停")
 
+    def _run_health_check(self) -> None:
+        report, ok = self._build_health_report()
+        self._set_status("健康检查完成：正常" if ok else "健康检查完成：有需要处理的项目")
+        if ok:
+            QMessageBox.information(self, "健康检查", report)
+        else:
+            QMessageBox.warning(self, "健康检查", report)
+
+    def _build_health_report(self) -> tuple[str, bool]:
+        lines = [
+            "校园网自动登录助手健康检查",
+            f"检查时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+        ]
+        problems = 0
+
+        def add(ok: bool, title: str, detail: str) -> None:
+            nonlocal problems
+            if not ok:
+                problems += 1
+            prefix = "正常" if ok else "需要处理"
+            lines.append(f"[{prefix}] {title}：{detail}")
+
+        profile = self._current_profile()
+        add(self.tray_available, "系统托盘", "可用" if self.tray_available else "当前系统托盘不可用，窗口无法可靠隐藏到后台")
+        if not profile:
+            add(False, "配置档案", "还没有保存配置，请先新增配置")
+            return "\n".join(lines), False
+
+        add(True, "当前配置", f"{profile.name} / {profile.adapter_name}")
+        if profile.startup_enabled:
+            startup_ok = is_startup_enabled()
+            add(startup_ok, "开机自启", "系统自启项已启用" if startup_ok else "配置要求开机自启，但系统自启项不存在")
+        else:
+            add(True, "开机自启", "未要求开机自启")
+
+        if profile.resident_enabled:
+            running = bool(self.service and self.service.running)
+            add(running, "常驻服务", "正在运行" if running else "配置要求常驻，但当前后台服务未运行")
+        else:
+            add(True, "常驻服务", "未启用常驻")
+        add(True, "防睡眠", "已启用" if profile.prevent_sleep_enabled else "未启用")
+        add(True, "唤醒后检查", "已启用" if profile.resume_reconnect_enabled else "未启用")
+
+        try:
+            self.store.decrypt_password(profile)
+            add(True, "密码保存", "当前 Windows 用户可以解密保存的密码")
+        except Exception:
+            add(False, "密码保存", "保存的密码无法解密，登录时需要重新输入")
+
+        session = requests.Session()
+        session.headers.update({"User-Agent": USER_AGENT})
+        if profile.gateway:
+            try:
+                response = session.get(profile.gateway, timeout=5, allow_redirects=True)
+                add(response.status_code < 500, "网关访问", f"HTTP {response.status_code}，最终地址 {response.url}")
+            except requests.RequestException as exc:
+                add(False, "网关访问", f"访问失败：{exc}")
+        else:
+            add(False, "网关访问", "当前配置没有网关地址")
+
+        try:
+            adapter = get_adapter(profile.adapter_id)
+            online = adapter.check_status(
+                session,
+                self._profile_detection(profile),
+                profile.check_urls or [profile.check_url],
+            )
+            detail = "检测地址可访问，当前外网状态正常" if online else "检测地址不可达或被校园网门户拦截，可能需要重新登录"
+            add(online, "外网检测", detail)
+        except Exception as exc:
+            add(False, "外网检测", f"检测失败：{exc}")
+
+        lines.append("")
+        lines.append("结论：整体正常" if problems == 0 else f"结论：发现 {problems} 个需要处理的项目")
+        return "\n".join(lines), problems == 0
+
     def _check_network_now(self) -> None:
         profile = self._current_profile()
         if not profile:
@@ -954,12 +1073,23 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         finally:
             self.update_button.setEnabled(True)
 
-    def _watch_resume(self) -> None:
-        now = time.monotonic()
-        elapsed = now - self._last_resume_tick
-        self._last_resume_tick = now
-        if elapsed < 90:
+    def _install_power_event_filter(self) -> None:
+        if not sys.platform.startswith("win"):
             return
+        app = QApplication.instance()
+        if app is None:
+            return
+        try:
+            self.power_event_filter = PowerEventFilter(self._handle_power_event)
+            app.installNativeEventFilter(self.power_event_filter)
+        except Exception as exc:
+            self.logger.warning("Install power event filter failed: %s", exc)
+
+    def _handle_power_event(self, reason: str) -> None:
+        self._last_resume_tick = time.monotonic()
+        QTimer.singleShot(2000, lambda: self._trigger_resume_check(reason))
+
+    def _trigger_resume_check(self, reason: str) -> None:
         profile = self._current_profile()
         if (
             profile
@@ -968,7 +1098,15 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
             and self.service.running
             and not self.service.paused
         ):
-            self.service.request_check("检测到电脑可能刚从睡眠/休眠恢复，立即检查网络")
+            self.service.request_check(reason)
+
+    def _watch_resume(self) -> None:
+        now = time.monotonic()
+        elapsed = now - self._last_resume_tick
+        self._last_resume_tick = now
+        if elapsed < 90:
+            return
+        self._trigger_resume_check("检测到电脑可能刚从睡眠/休眠恢复，立即检查网络")
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)

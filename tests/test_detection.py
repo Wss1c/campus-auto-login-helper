@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import requests
 
-from campus_auto_login.adapters.drcom import DrComEportalAdapter
+from campus_auto_login.adapters.drcom import DrComEportalAdapter, classify_drcom_failure
 from campus_auto_login.power import AwakeGuard
 from campus_auto_login.detector import DetectionEngine
 from campus_auto_login.models import Credentials, DetectionResult, PortalPage, Profile
@@ -154,6 +154,39 @@ class DetectionTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertIn("已在线", result.message)
+
+    def test_drcom_password_failure_is_clear(self):
+        self.assertIn(
+            "密码",
+            classify_drcom_failure("0", "密码错误", 200, 'dr1003({"result":0})'),
+        )
+
+    def test_drcom_device_limit_failure_is_clear(self):
+        self.assertIn(
+            "在线设备",
+            classify_drcom_failure("0", "终端数量超过限制", 200, 'dr1003({"result":0})'),
+        )
+
+    def test_drcom_timeout_failure_is_clear(self):
+        adapter = DrComEportalAdapter()
+        detection = DetectionResult(
+            supported=True,
+            adapter_id="drcom_eportal",
+            adapter_name="Dr.COM / ePortal",
+            score=100,
+            gateway="http://192.0.2.1:801",
+            login_endpoint="http://192.0.2.1:801/eportal/portal/login",
+            logout_endpoint="http://192.0.2.1:801/eportal/portal/logout",
+        )
+
+        result = adapter.login(
+            FakeSequenceSession([requests.Timeout("timeout")]),
+            detection,
+            Credentials("20260000000", "test-password", "@telecom"),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("超时", result.message)
 
     def test_check_status_uses_next_url_after_failure(self):
         adapter = DrComEportalAdapter()

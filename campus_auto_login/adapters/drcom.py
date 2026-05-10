@@ -37,6 +37,54 @@ def _is_already_online(payload: dict, text: str) -> bool:
     return ret_code == "2" and ("在线" in message or "online" in message)
 
 
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in text for marker in markers)
+
+
+def _request_error_message(exc: requests.RequestException) -> str:
+    if isinstance(exc, requests.Timeout):
+        return "登录请求超时：校园网网关没有及时响应，请确认已连接校园网"
+    if isinstance(exc, requests.ConnectionError):
+        return "登录请求失败：无法连接校园网网关，请检查网关地址或当前网络"
+    return f"登录请求失败: {exc}"
+
+
+def classify_drcom_failure(
+    result_value: str,
+    gateway_message: str,
+    status_code: int,
+    summary: str,
+) -> str:
+    blob = f"{gateway_message}\n{summary}".lower()
+    if _contains_any(blob, ("密码", "password", "passwd", "pwd", "认证失败", "auth failed")):
+        return "登录失败：密码可能不正确，请重新输入密码后再试"
+    if _contains_any(
+        blob,
+        ("运营商", "后缀", "service", "domain", "isp", "账号不存在", "用户不存在", "not exist", "unknown user"),
+    ):
+        return "登录失败：账号或运营商后缀可能不匹配"
+    if _contains_any(blob, ("在线数", "终端", "设备", "最大连接", "limit", "too many", "max user")):
+        return "登录失败：在线设备数量可能已达上限，请先注销其他终端"
+    if _contains_any(blob, ("欠费", "余额", "停机", "限制", "冻结", "fee", "balance", "disabled")):
+        return "登录失败：账号可能欠费、停机或被限制"
+
+    if result_value == "2" or '"result":2' in summary:
+        return "登录失败：账号可能不存在，或运营商后缀不匹配"
+    if result_value == "3" or '"result":3' in summary:
+        return "登录失败：账号可能欠费、停机或被限制"
+    if result_value == "0" or '"result":0' in summary:
+        if gateway_message:
+            return f"登录失败：{gateway_message}"
+        return "登录失败：网关拒绝登录请求，请检查账号、密码或运营商后缀"
+    if status_code in {401, 403}:
+        return f"登录失败：网关拒绝请求，HTTP {status_code}"
+    if status_code >= 500:
+        return f"登录失败：校园网网关异常，HTTP {status_code}"
+    if not summary:
+        return f"登录失败：网关返回空响应，HTTP {status_code}"
+    return f"登录失败：HTTP {status_code}"
+
+
 class DrComEportalAdapter(PortalAdapter):
     adapter_id = "drcom_eportal"
     name = "Dr.COM / ePortal"
@@ -150,7 +198,7 @@ class DrComEportalAdapter(PortalAdapter):
                 timeout=timeout,
             )
         except requests.RequestException as exc:
-            return LoginResult(False, f"登录请求失败: {exc}", next_retry_seconds=60)
+            return LoginResult(False, _request_error_message(exc), next_retry_seconds=60)
 
         text = response.text or ""
         summary = compact_text(text)
@@ -165,14 +213,7 @@ class DrComEportalAdapter(PortalAdapter):
         if response.status_code == 200 and _is_already_online(payload, text):
             return LoginResult(True, "已在线，无需重复登录", response.status_code, summary)
 
-        if result_value == "0" or '"result":0' in text:
-            message = f"登录失败：{gateway_message}" if gateway_message else "登录失败：网关拒绝登录请求，请检查账号、密码或运营商后缀"
-        elif result_value == "2" or '"result":2' in text:
-            message = "登录失败：账号可能不存在或运营商后缀不匹配"
-        elif result_value == "3" or '"result":3' in text:
-            message = "登录失败：账号已欠费或被限制"
-        else:
-            message = f"登录失败：HTTP {response.status_code}"
+        message = classify_drcom_failure(result_value, gateway_message, response.status_code, summary)
         return LoginResult(False, message, response.status_code, summary, 60)
 
     def logout(
