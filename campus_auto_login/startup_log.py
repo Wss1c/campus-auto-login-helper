@@ -13,7 +13,12 @@ def _base_dir() -> Path:
 
 
 def startup_log_path() -> Path:
-    path = _base_dir() / "data" / "logs"
+    try:
+        from .paths import logs_dir
+
+        return logs_dir() / "startup_error.log"
+    except Exception:
+        path = _base_dir() / "data" / "logs"
     path.mkdir(parents=True, exist_ok=True)
     return path / "startup_error.log"
 

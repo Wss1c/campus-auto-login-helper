@@ -37,7 +37,7 @@
 在仓库右侧或顶部进入 **Releases**，下载最新版本中的：
 
 ```text
-CampusAutoLogin-v0.3.0-windows-x64-portable.zip
+CampusAutoLogin-v0.3.1-windows-x64-portable.zip
 ```
 
 下载后解压，双击运行：
@@ -46,7 +46,7 @@ CampusAutoLogin-v0.3.0-windows-x64-portable.zip
 CampusAutoLogin\CampusAutoLogin.exe
 ```
 
-绿色版不会写入安装目录以外的系统位置；运行后会在程序目录下生成本地 `data` 文件夹，用于保存配置和日志。密码使用 Windows DPAPI 加密保存，复制到其他电脑后需要重新输入密码。
+绿色版主程序免安装；配置和日志默认保存在当前 Windows 用户目录 `%APPDATA%\CampusAutoLogin`，避免重启、覆盖新版或移动程序目录后配置丢失。旧版程序目录下的 `data` 会在首次启动时自动迁移。密码使用 Windows DPAPI 加密保存，复制到其他电脑后需要重新输入密码。
 
 也可以使用网盘镜像下载：
 
@@ -124,10 +124,12 @@ open_safe_mode.bat
 绿色版运行时会在程序目录下生成本地数据：
 
 ```text
-dist\CampusAutoLogin\data
+%APPDATA%\CampusAutoLogin
 ```
 
 其中包含配置、日志和启动错误信息。这些文件可能包含本机状态或加密后的密码，不应提交到 Git。
+
+如果确实需要把配置保存在程序目录旁边，可以在 `CampusAutoLogin.exe` 同目录创建空文件 `portable.flag`，或设置环境变量 `CAMPUS_AUTO_LOGIN_PORTABLE=1`。
 
 ## 安全说明
 

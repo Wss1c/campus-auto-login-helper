@@ -295,8 +295,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
     def __init__(self, minimized: bool = False, recovery_window: bool = False) -> None:
         super().__init__()
         self.setWindowTitle("校园网自动登录")
-        self.resize(1180, 760)
-        self.setMinimumSize(1040, 680)
+        self._set_initial_window_size()
         self.setStyleSheet(APP_STYLES)
         self.store = ConfigStore(data_dir())
         self.logger = get_logger(logs_dir())
@@ -338,6 +337,19 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self.resume_timer.timeout.connect(self._watch_resume)
         self.resume_timer.start(15000)
         self._install_power_event_filter()
+
+    def _set_initial_window_size(self) -> None:
+        self.setMinimumSize(1080, 680)
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.resize(1360, 840)
+            return
+        available = screen.availableGeometry()
+        width = min(1520, max(1280, int(available.width() * 0.86)))
+        height = min(940, max(760, int(available.height() * 0.86)))
+        width = min(width, max(1080, available.width() - 40))
+        height = min(height, max(680, available.height() - 40))
+        self.resize(width, height)
 
     def _make_button(self, text: str, kind: str = "", icon_name: str = "") -> QPushButton:
         button = QPushButton(text)
@@ -942,6 +954,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
             return "\n".join(lines), False
 
         add(True, "当前配置", f"{profile.name} / {profile.adapter_name}")
+        add(True, "数据目录", str(data_dir()))
         if profile.startup_enabled:
             startup_ok = is_startup_enabled()
             add(startup_ok, "开机自启", "系统自启项已启用" if startup_ok else "配置要求开机自启，但系统自启项不存在")
