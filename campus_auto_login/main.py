@@ -323,7 +323,7 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         self._load_profiles()
         if self.profiles:
             self.stack.setCurrentWidget(self.dashboard_page)
-            self._select_profile(0)
+            self._select_initial_profile()
         else:
             self.stack.setCurrentWidget(self.detect_page)
 
@@ -660,6 +660,18 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         for profile in self.profiles:
             self.profile_list.addItem(self._profile_list_text(profile))
 
+    def _select_initial_profile(self) -> None:
+        if not self.profiles:
+            return
+        selected_id = self.store.load_selected_profile_id()
+        row = next(
+            (index for index, profile in enumerate(self.profiles) if profile.id == selected_id),
+            0,
+        )
+        self.profile_list.setCurrentRow(row)
+        if self.profile_list.currentRow() != row:
+            self._select_profile(row)
+
     def _current_profile(self) -> Profile | None:
         row = self.profile_list.currentRow()
         if row < 0 or row >= len(self.profiles):
@@ -690,14 +702,19 @@ class MainWindow(QMainWindow):  # type: ignore[misc]
         if self.profiles:
             self.stack.setCurrentWidget(self.dashboard_page)
             if self.profile_list.currentRow() < 0:
-                self.profile_list.setCurrentRow(0)
+                self._select_initial_profile()
             return
         self.stack.setCurrentWidget(self.detect_page)
 
     def _select_profile(self, row: int) -> None:
-        profile = self._current_profile()
-        if not profile:
+        if row < 0 or row >= len(self.profiles):
             return
+        if self.profile_list.currentRow() != row:
+            self.profile_list.blockSignals(True)
+            self.profile_list.setCurrentRow(row)
+            self.profile_list.blockSignals(False)
+        profile = self.profiles[row]
+        self.store.save_selected_profile_id(profile.id)
         option_widgets = [
             self.saved_name_input,
             self.resident_checkbox,

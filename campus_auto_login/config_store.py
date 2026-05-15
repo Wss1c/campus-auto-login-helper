@@ -16,15 +16,52 @@ class ConfigStore:
         self.path = self.data_dir / "profiles.json"
         self.protector = protector or CredentialProtector()
 
-    def load_profiles(self) -> list[Profile]:
+    def _read_payload(self) -> dict[str, Any]:
         if not self.path.exists():
-            return []
+            return {"version": 1, "settings": {}, "profiles": []}
         data = json.loads(self.path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"version": 1, "settings": {}, "profiles": []}
+        return data
+
+    @staticmethod
+    def _settings_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+        settings = payload.get("settings")
+        if not isinstance(settings, dict):
+            settings = {}
+        return {
+            "selected_profile_id": str(settings.get("selected_profile_id") or ""),
+        }
+
+    def load_profiles(self) -> list[Profile]:
+        data = self._read_payload()
         return [Profile.from_dict(item) for item in data.get("profiles", [])]
 
     def save_profiles(self, profiles: list[Profile]) -> None:
+        settings = self._settings_from_payload(self._read_payload())
+        profile_ids = {profile.id for profile in profiles}
+        if settings["selected_profile_id"] not in profile_ids:
+            settings["selected_profile_id"] = profiles[0].id if profiles else ""
         payload = {
             "version": 1,
+            "settings": settings,
+            "profiles": [profile.to_dict() for profile in profiles],
+        }
+        self.path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def load_selected_profile_id(self) -> str:
+        return self._settings_from_payload(self._read_payload())["selected_profile_id"]
+
+    def save_selected_profile_id(self, profile_id: str) -> None:
+        profiles = self.load_profiles()
+        profile_ids = {profile.id for profile in profiles}
+        selected_profile_id = profile_id if profile_id in profile_ids else (profiles[0].id if profiles else "")
+        payload = {
+            "version": 1,
+            "settings": {"selected_profile_id": selected_profile_id},
             "profiles": [profile.to_dict() for profile in profiles],
         }
         self.path.write_text(
